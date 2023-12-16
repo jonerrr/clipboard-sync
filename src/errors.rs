@@ -5,4 +5,6 @@ use tokio::io;
 pub enum ProgramError {
     #[error("Failed to bind")]
     Disconnect(#[from] io::Error),
+    #[error("Failed to connect to websocket")]
+    Connect(#[from] tokio_tungstenite::tungstenite::Error),
 }
