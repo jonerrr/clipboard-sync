@@ -8,21 +8,20 @@ use local_ip_address::local_ip;
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 mod errors;
+mod install;
 
 /// Sync your clipboard between all your devices
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Sets a custom config file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
-
+    // /// Sets a custom config file (not used)
+    // #[arg(short, long, value_name = "FILE")]
+    // config: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -47,9 +46,16 @@ enum Commands {
         #[arg(short, long, default_value = "4343")]
         port: u16,
         /// Address to listen on
-        #[arg(short, long, default_value = "127.0.0.1")]
+        #[arg(short, long, default_value = "0.0.0.0")]
         address: String,
+        /// Install as a service (probably requires root)
+        #[arg(short, long, default_value = "false")]
+        service: bool,
     },
+    // /// Install sync client as a service (probably requires root)
+    // InstallClient {},
+    // /// Install sync server as a service (probably requires root)
+    // InstallServer {},
 }
 
 #[derive(PartialEq, Clone)]
@@ -78,7 +84,6 @@ enum ClipboardData {
 
 #[tokio::main]
 async fn main() -> Result<(), ProgramError> {
-    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
     match &cli.command {
@@ -96,7 +101,7 @@ async fn main() -> Result<(), ProgramError> {
             // };
             let addr = format!("{}://{}:{}", protocol, address, port);
             let (ws_stream, _) = tokio_tungstenite::connect_async(&addr).await?;
-            tracing::info!("Websocket connection established with: {}", addr);
+            println!("Websocket connection established with: {}", addr);
 
             let (write, read) = ws_stream.split();
             let clipboard_to_ws = clipboard_rx.map(Ok).forward(write);
@@ -125,7 +130,6 @@ async fn main() -> Result<(), ProgramError> {
                             }
                             _ => Ok(()),
                         };
-                        // tracing::debug!("Received a message from server: {}", data);
                     },
                 )
             };
@@ -133,11 +137,22 @@ async fn main() -> Result<(), ProgramError> {
             pin_mut!(clipboard_to_ws, ws_to_clipboard);
             future::select(clipboard_to_ws, ws_to_clipboard).await;
         }
-        Commands::Server { port, address } => {
+        Commands::Server {
+            port,
+            address,
+            service,
+        } => {
+            if *service {
+                let args = format!("server --port {} --address {}", port, address);
+                install::create_service(args, "clipboard-sync-server".to_owned())?;
+                println!("Service installed");
+                return Ok(());
+            }
+
             let addr = format!("{}:{}", address, port);
             let listener = TcpListener::bind(&addr).await?;
             let local_ip = local_ip().unwrap();
-            tracing::info!("Listening on: {}\nLocal IP: {}", addr, local_ip);
+            println!("Listening on: {}\nLocal IP: {}", addr, local_ip);
             let peers = PeerMap::new(Mutex::new(HashMap::new()));
 
             while let Ok((stream, addr)) = listener.accept().await {
@@ -147,23 +162,55 @@ async fn main() -> Result<(), ProgramError> {
             // let mut clipboard = Clipboard::new().unwrap();
             // let data = clipboard.get().image();
 
-            // tracing::info!("clipboard: {:#?}", clipboard.get_image())
+            // println!("clipboard: {:#?}", clipboard.get_image())
         }
     }
 
     Ok(())
 }
 
+async fn read_clipboard(tx: futures_channel::mpsc::UnboundedSender<Message>) {
+    let mut clipboard = Clipboard::new().unwrap();
+    let mut last_clipboard: ClipboardData = ClipboardData::Text("".to_owned());
+
+    //TODO: use less clones
+    loop {
+        if let Ok(data) = clipboard.get_text() {
+            if last_clipboard != ClipboardData::Text(data.clone()) {
+                last_clipboard = ClipboardData::Text(data.clone());
+                // println!("clipboard: {:#?}", data);
+                tx.unbounded_send(Message::text(data)).unwrap();
+            }
+        } else {
+            if let Ok(data) = clipboard.get_image() {
+                let img = Image {
+                    bytes: data.bytes.to_vec(),
+                    width: data.width,
+                    height: data.height,
+                };
+
+                if last_clipboard != ClipboardData::Image(img.clone()) {
+                    last_clipboard = ClipboardData::Image(img.clone());
+                    println!("clipboard img: {:#?}", data.width);
+                    //TODO impl into vec<u8> for Image
+                    tx.unbounded_send(Message::binary(img)).unwrap();
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    }
+}
+
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
 async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, peer_map: PeerMap) {
-    // tracing::info!("Incoming TCP connection from: {:?}", addr);
+    // println!("Incoming TCP connection from: {:?}", addr);
 
     let ws_stream = tokio_tungstenite::accept_async(raw_stream)
         .await
         .expect("Error during the websocket handshake occurred");
-    tracing::info!("Connected to: {:?}", addr);
+    println!("Connected to: {:?}", addr);
 
     // Insert the write part of this peer to the peer map.
     let (tx, rx) = unbounded();
@@ -198,38 +245,6 @@ async fn handle_connection(raw_stream: TcpStream, addr: SocketAddr, peer_map: Pe
     pin_mut!(broadcast_incoming, receive_from_others);
     future::select(broadcast_incoming, receive_from_others).await;
 
-    tracing::info!("{:?} disconnected", &addr);
+    println!("{:?} disconnected", &addr);
     peer_map.lock().unwrap().remove(&addr);
-}
-
-async fn read_clipboard(tx: futures_channel::mpsc::UnboundedSender<Message>) {
-    let mut clipboard = Clipboard::new().unwrap();
-    let mut last_clipboard: ClipboardData = ClipboardData::Text("".to_owned());
-
-    //TODO: use less clones
-    loop {
-        if let Ok(data) = clipboard.get_text() {
-            if last_clipboard != ClipboardData::Text(data.clone()) {
-                last_clipboard = ClipboardData::Text(data.clone());
-                // tracing::info!("clipboard: {:#?}", data);
-                tx.unbounded_send(Message::text(data)).unwrap();
-            }
-        } else {
-            if let Ok(data) = clipboard.get_image() {
-                let img = Image {
-                    bytes: data.bytes.to_vec(),
-                    width: data.width,
-                    height: data.height,
-                };
-
-                if last_clipboard != ClipboardData::Image(img.clone()) {
-                    last_clipboard = ClipboardData::Image(img.clone());
-                    tracing::info!("clipboard img: {:#?}", data.width);
-                    //TODO impl into vec<u8> for Image
-                    tx.unbounded_send(Message::binary(img)).unwrap();
-                }
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    }
 }
