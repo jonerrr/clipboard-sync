@@ -13,7 +13,7 @@ use std::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 mod errors;
-mod install;
+mod service;
 
 /// Sync your clipboard between all your devices
 #[derive(Parser)]
@@ -39,6 +39,9 @@ enum Commands {
         /// Use TLS (NOT IMPLEMENTED YET)
         #[arg(short, long, default_value = "false")]
         tls: bool,
+        /// Install as a service (probably requires root)
+        #[arg(short, long, default_value = "false")]
+        service: bool,
     },
     /// Starts sync server
     Server {
@@ -85,9 +88,23 @@ enum ClipboardData {
 #[tokio::main]
 async fn main() -> Result<(), ProgramError> {
     let cli = Cli::parse();
+    //TODO make background global option
 
     match &cli.command {
-        Commands::Client { port, address, tls } => {
+        Commands::Client {
+            port,
+            address,
+            tls,
+            service,
+        } => {
+            if *service {
+                // let args = format!("client --port {} --address {}", port, address);
+                // service::create(args, "clipboard-sync-client".to_owned()).await?;
+                // return Ok(());
+                service::daemon("clipboard-sync-client".to_owned());
+                println!("running in background");
+            }
+
             let (clipboard_tx, clipboard_rx) = futures_channel::mpsc::unbounded();
             tokio::spawn(read_clipboard(clipboard_tx));
 
@@ -143,10 +160,10 @@ async fn main() -> Result<(), ProgramError> {
             service,
         } => {
             if *service {
-                let args = format!("server --port {} --address {}", port, address);
-                install::create_service(args, "clipboard-sync-server".to_owned())?;
-                println!("Service installed");
-                return Ok(());
+                // let args = format!("server --port {} --address {}", port, address);
+                // service::create(args, "clipboard-sync-server".to_owned()).await?;
+                // return Ok(());
+                service::daemon("clipboard-sync-server".to_owned());
             }
 
             let addr = format!("{}:{}", address, port);

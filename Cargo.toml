@@ -2,10 +2,12 @@
 name = "clipboard-sync"
 version = "0.1.0"
 edition = "2021"
+authors = ["Jonah"]
 
 [dependencies]
 arboard = "3.3.0"
 clap = { version = "4.4.11", features = ["derive", "env"] }
+daemonize = "0.5.0"
 futures-channel = "0.3.29"
 futures-util = "0.3.29"
 local-ip-address = "0.5.6"
@@ -16,5 +18,6 @@ tokio = { version = "1.35.0", features = [
     "net",
     "rt-multi-thread",
     "time",
+    "process",
 ] }
 tokio-tungstenite = { version = "0.21.0", features = ["native-tls"] }
