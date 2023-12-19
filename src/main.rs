@@ -31,28 +31,28 @@ enum Commands {
     /// starts sync client
     Client {
         /// Port to connect to
-        #[arg(short, long, default_value = "4343")]
+        #[arg(short, long, env, default_value = "4343")]
         port: u16,
         /// Address to connect to
-        #[arg(short, long, default_value = "127.0.0.1")]
+        #[arg(short, long, env, default_value = "127.0.0.1")]
         address: String,
         /// Use TLS (NOT IMPLEMENTED YET)
-        #[arg(short, long, default_value = "false")]
+        #[arg(short, long, env, default_value = "false")]
         tls: bool,
         /// Install as a service (probably requires root)
-        #[arg(short, long, default_value = "false")]
+        #[arg(short, long, env, default_value = "false")]
         service: bool,
     },
     /// Starts sync server
     Server {
         /// Port to listen on
-        #[arg(short, long, default_value = "4343")]
+        #[arg(short, long, env, default_value = "4343")]
         port: u16,
         /// Address to listen on
-        #[arg(short, long, default_value = "0.0.0.0")]
+        #[arg(short, long, env, default_value = "0.0.0.0")]
         address: String,
         /// Install as a service (probably requires root)
-        #[arg(short, long, default_value = "false")]
+        #[arg(short, long, env, default_value = "false")]
         service: bool,
     },
     // /// Install sync client as a service (probably requires root)
@@ -98,11 +98,17 @@ async fn main() -> Result<(), ProgramError> {
             service,
         } => {
             if *service {
-                // let args = format!("client --port {} --address {}", port, address);
-                // service::create(args, "clipboard-sync-client".to_owned()).await?;
-                // return Ok(());
-                service::daemon("clipboard-sync-client".to_owned());
-                println!("running in background");
+                let mut env = Vec::new();
+                env.push(format!("PORT={}", port));
+                env.push(format!("ADDRESS={}", address));
+                // added to prevent clipboard errors when running as a service
+                // env.push("DISPLAY=:0".to_owned());
+                if std::env::consts::OS == "linux" {
+                    env.push(format!("DISPLAY={}", std::env::var("DISPLAY").unwrap()));
+                }
+                service::create("clipboard-sync-client".to_owned(), "client".to_owned(), env)
+                    .await?;
+                return Ok(());
             }
 
             let (clipboard_tx, clipboard_rx) = futures_channel::mpsc::unbounded();
@@ -160,10 +166,13 @@ async fn main() -> Result<(), ProgramError> {
             service,
         } => {
             if *service {
-                // let args = format!("server --port {} --address {}", port, address);
-                // service::create(args, "clipboard-sync-server".to_owned()).await?;
-                // return Ok(());
-                service::daemon("clipboard-sync-server".to_owned());
+                let mut env = Vec::new();
+                env.push(format!("PORT={}", port));
+                env.push(format!("ADDRESS={}", address));
+
+                service::create("clipboard-sync-server".to_owned(), "server".to_owned(), env)
+                    .await?;
+                return Ok(());
             }
 
             let addr = format!("{}:{}", address, port);

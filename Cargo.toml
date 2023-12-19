@@ -7,7 +7,6 @@ authors = ["Jonah"]
 [dependencies]
 arboard = "3.3.0"
 clap = { version = "4.4.11", features = ["derive", "env"] }
-daemonize = "0.5.0"
 futures-channel = "0.3.29"
 futures-util = "0.3.29"
 local-ip-address = "0.5.6"
