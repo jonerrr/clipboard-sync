@@ -19,17 +19,17 @@ mod service;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    // /// Sets a custom config file (not used)
-    // #[arg(short, long, value_name = "FILE")]
-    // config: Option<PathBuf>,
+    /// Install as a service (probably requires root)
+    #[arg(short, long, default_value = "false")]
+    service: bool,
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// starts sync client
-    Client {
+    /// Connect client to server
+    Connect {
         /// Port to connect to
         #[arg(short, long, env, default_value = "4343")]
         port: u16,
@@ -39,21 +39,21 @@ enum Commands {
         /// Use TLS (NOT IMPLEMENTED YET)
         #[arg(short, long, env, default_value = "false")]
         tls: bool,
-        /// Install as a service (probably requires root)
-        #[arg(short, long, env, default_value = "false")]
-        service: bool,
+        // /// Install as a service (probably requires root)
+        // #[arg(short, long, env, default_value = "false")]
+        // service: bool,
     },
     /// Starts sync server
-    Server {
+    Start {
         /// Port to listen on
         #[arg(short, long, env, default_value = "4343")]
         port: u16,
         /// Address to listen on
         #[arg(short, long, env, default_value = "0.0.0.0")]
         address: String,
-        /// Install as a service (probably requires root)
-        #[arg(short, long, env, default_value = "false")]
-        service: bool,
+        // /// Install as a service (probably requires root)
+        // #[arg(short, long, env, default_value = "false")]
+        // service: bool,
     },
     // /// Install sync client as a service (probably requires root)
     // InstallClient {},
@@ -85,29 +85,29 @@ enum ClipboardData {
     Image(Image),
 }
 
+//TODO create p2p network thing
+
 #[tokio::main]
 async fn main() -> Result<(), ProgramError> {
     let cli = Cli::parse();
     //TODO make background global option
 
     match &cli.command {
-        Commands::Client {
-            port,
-            address,
-            tls,
-            service,
-        } => {
-            if *service {
+        Commands::Connect { port, address, tls } => {
+            if cli.service {
                 let mut env = Vec::new();
-                env.push(format!("PORT={}", port));
-                env.push(format!("ADDRESS={}", address));
+                env.push(("PORT".to_owned(), port.to_string()));
+                env.push(("ADDRESS".to_owned(), address.to_owned()));
                 // added to prevent clipboard errors when running as a service
-                // env.push("DISPLAY=:0".to_owned());
                 if std::env::consts::OS == "linux" {
-                    env.push(format!("DISPLAY={}", std::env::var("DISPLAY").unwrap()));
+                    env.push(("DISPLAY".to_owned(), std::env::var("DISPLAY").unwrap()));
                 }
-                service::create("clipboard-sync-client".to_owned(), "client".to_owned(), env)
-                    .await?;
+                service::create(
+                    "clipboard-sync-client".to_owned(),
+                    "connect".to_owned(),
+                    env,
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -160,15 +160,12 @@ async fn main() -> Result<(), ProgramError> {
             pin_mut!(clipboard_to_ws, ws_to_clipboard);
             future::select(clipboard_to_ws, ws_to_clipboard).await;
         }
-        Commands::Server {
-            port,
-            address,
-            service,
-        } => {
-            if *service {
+        Commands::Start { port, address } => {
+            if cli.service {
+                // maybe use hashmap
                 let mut env = Vec::new();
-                env.push(format!("PORT={}", port));
-                env.push(format!("ADDRESS={}", address));
+                env.push(("PORT".to_owned(), port.to_string()));
+                env.push(("ADDRESS".to_owned(), address.to_owned()));
 
                 service::create("clipboard-sync-server".to_owned(), "server".to_owned(), env)
                     .await?;

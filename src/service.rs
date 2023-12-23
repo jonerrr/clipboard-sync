@@ -13,6 +13,7 @@ pub async fn create(
 
     let exe_path = std::env::current_exe()?.display().to_string();
 
+    //TODO fix formatting here
     let mut env_string = String::new();
     for env in environment {
         env_string.push_str(&format!(r#"Environment="{}""#, env));
@@ -65,6 +66,7 @@ WantedBy=multi-user.target"#,
     //         .await?;
     //     println!("bin_t added to file's security context.");
     // }
+    //TODO: automatically do all of this stuff instead of asking
 
     println!(
         "Service installed to {}\nWould you like to reload the systemd daemon? (Y/n)",
@@ -111,20 +113,44 @@ WantedBy=multi-user.target"#,
     Ok(())
 }
 
-fn declined() -> Result<bool, std::io::Error> {
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_lowercase() == "n")
-}
-
+// TODO create launchtl plist for macos
 #[cfg(any(target_os = "macos"))]
-fn create() -> Result<(), ()> {
-    todo!("create service on macos");
+pub async fn create(
+    service_name: String,
+    cmd: String,
+    environment: Vec<(String, String)>,
+) -> Result<(), std::io::Error> {
+    println!("Installing as launchd daemon.");
+
+    let exe_path = std::env::current_exe()?.display().to_string();
+
+    let env_formatted = environment
+        .iter()
+        .map(|(key, value)| format!(r#"<key>{}</key><string>{}</string>"#, key, value))
+        .collect::<Vec<String>>()
+        .join("");
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>KeepAlive</key><true/><key>Label</key><string>com.clipboard-sync.{cmd}</string><key>ProgramArguments</key><array><string>{exe_path}</string><string>{cmd}</string></array><key>EnvironmentVariables</key><dict>{env_formatted}</dict><key>RunAtLoad</key><true/></dict></plist>"#
+    );
+
+    println!("{}", plist);
+
+    let service_path = format!("com.clipboard-sync.{}.plist", cmd);
+    let mut file = std::fs::File::create(&service_path)?;
+    file.write_all(plist.as_bytes())?;
+
     Ok(())
 }
 
 #[cfg(any(target_os = "windows"))]
-fn create() -> Result<(), ()> {
+pub async fn create(service_name: String, cmd: String, environment: Vec<String>) -> Result<(), ()> {
     todo!("create service on windows");
     Ok(())
+}
+
+fn declined() -> Result<bool, std::io::Error> {
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_lowercase() == "n")
 }
