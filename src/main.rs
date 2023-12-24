@@ -19,7 +19,7 @@ mod service;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Install as a service (probably requires root)
+    /// Install as a background service (may require root)
     #[arg(short, long, default_value = "false")]
     service: bool,
     #[command(subcommand)]
@@ -55,10 +55,6 @@ enum Commands {
         // #[arg(short, long, env, default_value = "false")]
         // service: bool,
     },
-    // /// Install sync client as a service (probably requires root)
-    // InstallClient {},
-    // /// Install sync server as a service (probably requires root)
-    // InstallServer {},
 }
 
 #[derive(PartialEq, Clone)]
@@ -162,7 +158,7 @@ async fn main() -> Result<(), ProgramError> {
         }
         Commands::Start { port, address } => {
             if cli.service {
-                // maybe use hashmap
+                // maybe use hashmap instead of vec
                 let mut env = Vec::new();
                 env.push(("PORT".to_owned(), port.to_string()));
                 env.push(("ADDRESS".to_owned(), address.to_owned()));
