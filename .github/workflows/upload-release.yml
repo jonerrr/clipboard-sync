@@ -27,7 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-        # Run build
       - name: install rustup
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup-init.sh
@@ -37,21 +36,14 @@ jobs:
       - name: Build release binaries
         run: cargo build --release
 
-      # - name: Build archive
-      #   shell: bash
-      #   run: |
-      #     staging="clipboard-sync_${{ matrix.build }}_${{ github.event.release.tag_name }}"
-      #     mkdir -p "$staging"
-
-      #     if [ "${{ matrix.os }}" = "windows-latest" ]; then
-      #       cp target/release/{rustfmt.exe,cargo-fmt.exe,rustfmt-format-diff.exe,git-rustfmt.exe} "$staging/"
-      #       7z a "$staging.zip" "$staging"
-      #       echo "ASSET=$staging.zip" >> $GITHUB_ENV
-      #     else
-      #       cp target/release/{rustfmt,cargo-fmt,rustfmt-format-diff,git-rustfmt} "$staging/"
-      #       tar czf "$staging.tar.gz" "$staging"
-      #       echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
-      #     fi
+      - name: Rename binaries
+        shell: bash
+        run: |
+          name="clipboard-sync_${{ matrix.build }}_${{ github.event.release.tag_name }}"
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            name="${name}.exe"
+          fi
+          mv target/release/clipboard-sync $name
 
       - name: Upload Release Asset
         if: github.event_name == 'release'
@@ -60,8 +52,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: |
-            target/release/clipboard-sync
-          # upload_url: ${{ github.event.release.upload_url }}
-          # asset_path: ${{ env.ASSET }}
-          # asset_name: ${{ env.ASSET }}
-          # asset_content_type: application/octet-stream
+            clipboard-sync_${{ matrix.build }}_${{ github.event.release.tag_name }}
