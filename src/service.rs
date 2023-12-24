@@ -144,8 +144,12 @@ pub async fn create(
 }
 
 #[cfg(any(target_os = "windows"))]
-pub async fn create(service_name: String, cmd: String, environment: Vec<String>) -> Result<(), ()> {
-    todo!("create service on windows");
+pub async fn create(
+    service_name: String,
+    cmd: String,
+    environment: Vec<(String, String)>,
+) -> Result<(), std::io::Error> {
+    todo!("windows service creation");
     Ok(())
 }
 

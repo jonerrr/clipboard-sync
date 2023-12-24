@@ -167,7 +167,7 @@ async fn main() -> Result<(), ProgramError> {
                 env.push(("PORT".to_owned(), port.to_string()));
                 env.push(("ADDRESS".to_owned(), address.to_owned()));
 
-                service::create("clipboard-sync-server".to_owned(), "server".to_owned(), env)
+                service::create("clipboard-sync-server".to_owned(), "start".to_owned(), env)
                     .await?;
                 return Ok(());
             }
