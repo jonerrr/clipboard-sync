@@ -1,15 +1,23 @@
+use aes_gcm::{
+    aead::{
+        generic_array::GenericArray, rand_core::RngCore, Aead, AeadCore, KeyInit, Nonce, OsRng,
+    },
+    aes::cipher::typenum::U12,
+    Aes256Gcm,
+};
 use arboard::{Clipboard, ImageData};
 use clap::{Parser, Subcommand};
 use errors::ProgramError;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 use local_ip_address::local_ip;
-// use native_tls::TlsConnector;
+use pbkdf2::pbkdf2_hmac_array;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
+
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 mod errors;
@@ -22,6 +30,11 @@ struct Cli {
     /// Install as a background service (may require root)
     #[arg(short, long, default_value = "false")]
     service: bool,
+
+    /// Use AES encryption, password is required
+    #[arg(short, long)]
+    password: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -64,7 +77,6 @@ struct Image {
     height: usize,
 }
 
-// convert Image to Vec<u8> and include the width and hieght in the vec
 impl Into<Vec<u8>> for Image {
     fn into(self) -> Vec<u8> {
         let mut vec = Vec::new();
@@ -81,12 +93,24 @@ enum ClipboardData {
     Image(Image),
 }
 
-//TODO create p2p network thing
-
 #[tokio::main]
 async fn main() -> Result<(), ProgramError> {
     let cli = Cli::parse();
-    //TODO make background global option
+
+    // let salt = SaltString::(&mut OsRng);
+    // let mut salt = [0u8; 32];
+    // OsRng.fill_bytes(&mut salt);
+
+    // let key: [u8; 32] = pbkdf2_hmac_array::<sha2::Sha256, 32>(password, &salt, 600_000);
+    // let cipher = Aes256Gcm::new(&key.into());
+    // let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    // let ciphertext = cipher.encrypt(&nonce, b"poop".as_ref()).unwrap();
+    // let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref()).unwrap();
+
+    // let p_str = String::from_utf8(plaintext).unwrap();
+
+    // let mut file = std::fs::File::create("key.bin").unwrap();
+    // file.write_all(&key).unwrap();
 
     match &cli.command {
         Commands::Connect { port, address, tls } => {
@@ -108,17 +132,22 @@ async fn main() -> Result<(), ProgramError> {
             }
 
             let (clipboard_tx, clipboard_rx) = futures_channel::mpsc::unbounded();
-            tokio::spawn(read_clipboard(clipboard_tx));
 
-            let protocol: &str = if *tls { "wss" } else { "ws" };
-            // let connector = if *tls {
-            //     let mut builder = TlsConnector::builder();
-            //     builder.danger_accept_invalid_certs(true);
-            //     Connector::NativeTls(builder.build().unwrap())
-            // } else {
-            //     Connector::Plain
-            // };
-            let addr = format!("{}://{}:{}", protocol, address, port);
+            let cipher = match cli.password {
+                Some(password) => {
+                    println!("Encrypting all traffic using AES256-GCM");
+                    let mut salt = [0u8; 32];
+                    OsRng.fill_bytes(&mut salt);
+                    let key: [u8; 32] =
+                        pbkdf2_hmac_array::<sha2::Sha256, 32>(password.as_bytes(), &salt, 600_000);
+                    Some(Aes256Gcm::new(&key.into()))
+                }
+                None => None,
+            };
+
+            tokio::spawn(read_clipboard(clipboard_tx, cipher.clone()));
+
+            let addr = format!("ws://{}:{}", address, port);
             let (ws_stream, _) = tokio_tungstenite::connect_async(&addr).await?;
             println!("Websocket connection established with: {}", addr);
 
@@ -130,24 +159,44 @@ async fn main() -> Result<(), ProgramError> {
                     |message: Result<Message, tokio_tungstenite::tungstenite::Error>| async {
                         let mut clipboard = Clipboard::new().unwrap();
 
-                        let _ = match message.unwrap() {
-                            Message::Text(text) => clipboard.set_text(text),
-                            Message::Binary(img) => {
-                                let width = usize::from_be_bytes(img[0..8].try_into().unwrap());
-                                let height = usize::from_be_bytes(img[8..16].try_into().unwrap());
-                                let bytes = img[16..].to_vec();
-                                let img = Image {
-                                    bytes,
-                                    width,
-                                    height,
+                        // get binary message and decrypt if cipher is set
+                        match message {
+                            Ok(message) => {
+                                let mut data = message.into_data();
+                                if let Some(cipher) = &cipher {
+                                    let nonce = GenericArray::from_slice(&data[0..12]);
+                                    let cipher_text = data[12..].to_vec();
+                                    data = cipher.decrypt(&nonce, cipher_text.as_ref()).unwrap();
                                 };
-                                clipboard.set_image(ImageData {
-                                    bytes: img.bytes.into(),
-                                    width: img.width,
-                                    height: img.height,
-                                })
+                                // set clipboard data
+                                match data[0] {
+                                    0 => {
+                                        let text = String::from_utf8(data[1..].to_vec()).unwrap();
+                                        clipboard.set_text(text).unwrap();
+                                    }
+                                    1 => {
+                                        let width =
+                                            usize::from_be_bytes(data[1..9].try_into().unwrap());
+                                        let height =
+                                            usize::from_be_bytes(data[9..17].try_into().unwrap());
+                                        let bytes = data[17..].to_vec();
+                                        let img = Image {
+                                            bytes,
+                                            width,
+                                            height,
+                                        };
+                                        clipboard
+                                            .set_image(ImageData {
+                                                bytes: img.bytes.into(),
+                                                width: img.width,
+                                                height: img.height,
+                                            })
+                                            .unwrap();
+                                    }
+                                    _ => (),
+                                };
                             }
-                            _ => Ok(()),
+                            Err(_) => (),
                         };
                     },
                 )
@@ -188,36 +237,83 @@ async fn main() -> Result<(), ProgramError> {
     Ok(())
 }
 
-async fn read_clipboard(tx: futures_channel::mpsc::UnboundedSender<Message>) {
+async fn read_clipboard(
+    tx: futures_channel::mpsc::UnboundedSender<Message>,
+    cipher: Option<Aes256Gcm>,
+) {
     let mut clipboard = Clipboard::new().unwrap();
-    let mut last_clipboard: ClipboardData = ClipboardData::Text("".to_owned());
+    let mut last_clipboard: Vec<u8> = Vec::new();
 
-    //TODO: use less clones
     loop {
-        if let Ok(data) = clipboard.get_text() {
-            if last_clipboard != ClipboardData::Text(data.clone()) {
-                last_clipboard = ClipboardData::Text(data.clone());
-                // println!("clipboard: {:#?}", data);
-                tx.unbounded_send(Message::text(data)).unwrap();
-            }
-        } else {
-            if let Ok(data) = clipboard.get_image() {
-                let img = Image {
-                    bytes: data.bytes.to_vec(),
-                    width: data.width,
-                    height: data.height,
-                };
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-                if last_clipboard != ClipboardData::Image(img.clone()) {
-                    last_clipboard = ClipboardData::Image(img.clone());
-                    println!("clipboard img: {:#?}", data.width);
-                    //TODO impl into vec<u8> for Image
-                    tx.unbounded_send(Message::binary(img)).unwrap();
+        let data = match clipboard.get_text() {
+            Ok(data) => {
+                let mut data_vec = Vec::new();
+                // extend the vector first with the data type (text = 0 and image = 1)
+                data_vec.extend_from_slice(&(0 as u32).to_be_bytes());
+                data_vec.extend_from_slice(data.as_bytes());
+                data_vec
+            }
+            Err(_) => {
+                if let Ok(data) = clipboard.get_image() {
+                    let mut data_vec = Vec::new();
+                    data_vec.extend_from_slice(&(1 as u32).to_be_bytes());
+                    // include image data dimensions
+                    data_vec.extend_from_slice(&data.width.to_be_bytes());
+                    data_vec.extend_from_slice(&data.height.to_be_bytes());
+                    data_vec.extend_from_slice(&data.bytes);
+                    data_vec
+                } else {
+                    continue;
                 }
             }
+        };
+
+        if last_clipboard != data {
+            last_clipboard = data.clone();
+
+            if let Some(cipher) = &cipher {
+                let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                let ciphertext = cipher.encrypt(&nonce, data.as_ref()).unwrap();
+                // send nonce and ciphertext
+                let mut data_vec = Vec::new();
+                data_vec.extend_from_slice(&nonce);
+                data_vec.extend_from_slice(&ciphertext);
+                tx.unbounded_send(Message::binary(data_vec)).unwrap();
+
+                continue;
+            }
+
+            tx.unbounded_send(Message::binary(data)).unwrap();
         }
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
     }
+
+    // let mut last_clipboard: ClipboardData = ClipboardData::Text("".to_owned());
+
+    // loop {
+    //     if let Ok(data) = clipboard.get_text() {
+    //         let cp_data = ClipboardData::Text(data.clone());
+    //         if last_clipboard != cp_data {
+    //             last_clipboard = cp_data;
+    //             tx.unbounded_send(Message::text(data)).unwrap();
+    //         }
+    //     } else {
+    //         if let Ok(data) = clipboard.get_image() {
+    //             let img = Image {
+    //                 bytes: data.bytes.to_vec(),
+    //                 width: data.width,
+    //                 height: data.height,
+    //             };
+
+    //             if last_clipboard != ClipboardData::Image(img.clone()) {
+    //                 last_clipboard = ClipboardData::Image(img.clone());
+    //                 tx.unbounded_send(Message::binary(img)).unwrap();
+    //             }
+    //         }
+    //     }
+    //     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    // }
 }
 
 type Tx = UnboundedSender<Message>;

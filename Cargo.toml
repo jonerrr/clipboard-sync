@@ -5,12 +5,14 @@ edition = "2021"
 authors = ["Jonah"]
 
 [dependencies]
+aes-gcm = { version = "0.10.3", features = ["aes"] }
 arboard = "3.3.0"
 clap = { version = "4.4.11", features = ["derive", "env"] }
 futures-channel = "0.3.29"
 futures-util = "0.3.29"
 local-ip-address = "0.5.6"
-native-tls = "0.2.11"
+pbkdf2 = { version = "0.12.2", features = [] }
+sha2 = "0.10.8"
 thiserror = "1.0.50"
 tokio = { version = "1.35.0", features = [
     "macros",
