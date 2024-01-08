@@ -58,6 +58,8 @@ struct Cli {
     command: Commands,
 }
 
+//TODO: seperate each command into a file
+//TODO: make address not require -a flag
 #[derive(Subcommand)]
 enum Commands {
     /// Connect client to server
@@ -303,8 +305,6 @@ async fn main() -> Result<(), ProgramError> {
             let (clipboard_tx, clipboard_rx) = futures_channel::mpsc::unbounded();
             let mut cipher = None;
 
-            tokio::spawn(read_clipboard(clipboard_tx, cipher.clone()));
-
             let addr = format!("ws://{}:{}/sync", address, port);
 
             let mut rng = rand::thread_rng();
@@ -337,7 +337,7 @@ async fn main() -> Result<(), ProgramError> {
                 pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut hash);
                 cipher = Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&hash)));
             }
-
+            tokio::spawn(read_clipboard(clipboard_tx, cipher.clone()));
             let (write, read) = ws_stream.split();
             let clipboard_to_ws = clipboard_rx.map(Ok).forward(write);
 
@@ -492,26 +492,26 @@ async fn read_clipboard(
 
             if let Some(cipher) = &cipher {
                 let nonce: GenericArray<u8, _> = Aes256Gcm::generate_nonce(&mut OsRng);
-                println!("nonce: {:?}", nonce);
+                println!("nonce: {:?}, len: {}", nonce, nonce.len());
                 let ciphertext = cipher.encrypt(&nonce, data.as_ref()).unwrap();
                 // send nonce and ciphertext
                 let mut data_vec = Vec::new();
                 data_vec.extend_from_slice(&nonce);
                 data_vec.extend_from_slice(&ciphertext);
 
-                let nonce_c = GenericArray::from_slice(&data_vec[0..12]);
-                println!("nonce_c: {:?}", nonce_c);
+                // let nonce_c = GenericArray::from_slice(&data_vec[0..12]);
+                // println!("nonce_c: {:?}", nonce_c);
 
-                let cipher_text = data_vec[12..].to_vec();
+                // let cipher_text = data_vec[12..].to_vec();
 
-                match cipher.decrypt(&nonce_c, cipher_text.as_ref()) {
-                    Ok(plaintext) => println!("{:?}", plaintext),
-                    Err(e) => {
-                        dbg!(e);
+                // match cipher.decrypt(&nonce_c, cipher_text.as_ref()) {
+                //     Ok(plaintext) => println!("{:?}", plaintext),
+                //     Err(e) => {
+                //         dbg!(e);
 
-                        return;
-                    }
-                };
+                //         return;
+                //     }
+                // };
 
                 tx.unbounded_send(Message::binary(data_vec)).unwrap();
 
