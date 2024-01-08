@@ -1,11 +1,9 @@
 use aes_gcm::{
-    aead::{
-        generic_array::GenericArray, rand_core::RngCore, Aead, AeadCore, KeyInit, Nonce, OsRng,
-    },
-    aes::cipher::typenum::U12,
-    Aes256Gcm,
+    aead::{generic_array::GenericArray, Aead, AeadCore, KeyInit, Nonce, OsRng},
+    Aes256Gcm, Key,
 };
 use arboard::{Clipboard, ImageData};
+use base64::prelude::{Engine as _, BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use errors::ProgramError;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
@@ -13,8 +11,8 @@ use futures_util::{future, pin_mut, stream::TryStreamExt, SinkExt, StreamExt};
 use hyper::{
     body::Incoming,
     header::{
-        HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION,
-        UPGRADE,
+        HeaderName, HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
+        SEC_WEBSOCKET_VERSION, UPGRADE,
     },
     server::conn::http1,
     service::service_fn,
@@ -23,10 +21,7 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use local_ip_address::local_ip;
-use pbkdf2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    pbkdf2_hmac, pbkdf2_hmac_array, Pbkdf2,
-};
+use pbkdf2::{pbkdf2_hmac, pbkdf2_hmac_array};
 use rand::Rng;
 use sha2::Sha256;
 use std::{
@@ -204,36 +199,19 @@ async fn handle_request<'a>(
     peer_map: PeerMap,
     mut req: Request<Incoming>,
     addr: SocketAddr,
-    hash: Option<[u8; 20]>,
+    hash: Option<[u8; 32]>,
     salt: [u8; 20],
 ) -> Result<Response<body::Body>, Infallible> {
-    println!("Received a new, potentially ws handshake");
-    println!("The request's path is: {}", req.uri().path());
-    println!("The request's headers are:");
-    for (ref header, _value) in req.headers() {
-        println!("* {}", header);
-    }
+    // println!("Received a new, potentially ws handshake");
+    // println!("The request's path is: {}", req.uri().path());
+    // println!("The request's headers are:");
+    // for (ref header, _value) in req.headers() {
+    //     println!("* {}", header);
+    // }
     let upgrade = HeaderValue::from_static("Upgrade");
     let websocket = HeaderValue::from_static("websocket");
     let headers = req.headers();
     let key = headers.get(SEC_WEBSOCKET_KEY);
-
-    if let Some(hash) = hash {
-        let Some(password) = req.headers().get("X-Password") else {
-            return Ok(Response::new(body::bytes("failed")));
-        };
-        dbg!(&hash);
-        dbg!(&password);
-        let mut new_hash = [0u8; 20];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut new_hash);
-        dbg!(&new_hash);
-        if hash == new_hash {
-            println!("Password is valid");
-        } else {
-            println!("Password is invalid");
-            return Ok(Response::new(body::bytes("failed")));
-        }
-    }
 
     let derived = key.map(|k| derive_accept_key(k.as_bytes()));
     if req.method() != Method::GET
@@ -251,11 +229,36 @@ async fn handle_request<'a>(
             .map(|h| h == "13")
             .unwrap_or(false)
         || key.is_none()
-        || req.uri() != "/socket"
+        || req.uri() != "/sync"
     {
         return Ok(Response::new(body::bytes("failed")));
     }
+
     let ver = req.version();
+    let mut res = Response::new(body::empty());
+    *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+    *res.version_mut() = ver;
+    res.headers_mut().append(CONNECTION, upgrade);
+    res.headers_mut().append(UPGRADE, websocket);
+    res.headers_mut()
+        .append(SEC_WEBSOCKET_ACCEPT, derived.unwrap().parse().unwrap());
+
+    if let Some(hash) = hash {
+        let Some(password) = req.headers().get("X-Password") else {
+            return Ok(Response::new(body::bytes("failed")));
+        };
+        let mut new_hash = [0u8; 32];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut new_hash);
+        if hash != new_hash {
+            println!("Password is invalid");
+            return Ok(Response::new(body::bytes("failed")));
+        }
+        // let key = Key::<Aes256Gcm>::from_slice(&hash);
+        // let cipher = Aes256Gcm::new(key);
+        res.headers_mut()
+            .append("X-Salt", BASE64_STANDARD.encode(hash).parse().unwrap());
+    }
+
     tokio::task::spawn(async move {
         match hyper::upgrade::on(&mut req).await {
             Ok(upgraded) => {
@@ -270,17 +273,7 @@ async fn handle_request<'a>(
             Err(e) => println!("upgrade error: {}", e),
         }
     });
-    let mut res = Response::new(body::empty());
-    *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-    *res.version_mut() = ver;
-    res.headers_mut().append(CONNECTION, upgrade);
-    res.headers_mut().append(UPGRADE, websocket);
-    res.headers_mut()
-        .append(SEC_WEBSOCKET_ACCEPT, derived.unwrap().parse().unwrap());
-    // if hash.is_some() {
-    //     res.headers_mut()
-    //         .append("X-Salt", salt.to_string().parse().unwrap());
-    // }
+
     Ok(res)
 }
 
@@ -309,35 +302,46 @@ async fn main() -> Result<(), ProgramError> {
 
             let (clipboard_tx, clipboard_rx) = futures_channel::mpsc::unbounded();
             let mut cipher = None;
-            // let mut salt = None;
-
-            // if let Some(password) = cli.password {
-            //     println!("Encrypting all traffic using AES256-GCM");
-            //     let mut rand_salt = [0u8; 32];
-            //     OsRng.fill_bytes(&mut rand_salt);
-            //     let key: [u8; 32] =
-            //         pbkdf2_hmac_array::<sha2::Sha256, 32>(password.as_bytes(), &rand_salt, 16000);
-            //     cipher = Some(Aes256Gcm::new(&key.into()));
-            //     salt = Some(rand_salt);
-            // }
 
             tokio::spawn(read_clipboard(clipboard_tx, cipher.clone()));
 
-            let addr = format!("ws://{}:{}", address, port);
-            let (ws_stream, _) = tokio_tungstenite::connect_async(&addr).await?;
+            let addr = format!("ws://{}:{}/sync", address, port);
+
+            let mut rng = rand::thread_rng();
+            let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+            let sec_websocket_key = BASE64_STANDARD.encode(&random_bytes);
+
+            let mut request = Request::builder()
+                .uri(&addr)
+                .header("sec-websocket-key", sec_websocket_key)
+                .header("host", address)
+                .header("upgrade", "websocket")
+                .header("connection", "upgrade")
+                .header("sec-websocket-version", "13");
+            if let Some(password) = &cli.password {
+                request = request.header("x-password", password);
+            }
+            let request = request.body(()).unwrap();
+
+            let (ws_stream, res) = tokio_tungstenite::connect_async(request).await?;
             println!("Websocket connection established with: {}", addr);
-            // check if encryption is enabled and get salt if it is
+            // let mut salt: Option<Vec<u8>> = None;
+            if let Some(password) = &cli.password {
+                let Some(salt) = res.headers().get("x-salt") else {
+                    return Err(errors::ProgramError::Custom(
+                        "Failed to get salt".to_string(),
+                    ));
+                };
+                let salt = BASE64_STANDARD.decode(salt.as_bytes()).unwrap();
+                let mut hash = [0u8; 32];
+                pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut hash);
+                cipher = Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&hash)));
+            }
 
             let (write, read) = ws_stream.split();
             let clipboard_to_ws = clipboard_rx.map(Ok).forward(write);
 
-            let first_message = AtomicBool::new(cli.password.is_some());
-            let password = RwLock::new(cli.password.clone());
-            let key = RwLock::new(None);
-
             let ws_to_clipboard = {
-                // handle the first message separately to get the salt
-
                 read.for_each(
                     |message: Result<Message, tokio_tungstenite::tungstenite::Error>| async {
                         let mut clipboard = Clipboard::new().unwrap();
@@ -345,38 +349,6 @@ async fn main() -> Result<(), ProgramError> {
                         match message {
                             Ok(message) => {
                                 let mut data: Vec<u8> = message.into_data();
-
-                                // Handle the first message separately to get the salt.
-                                if first_message.load(std::sync::atomic::Ordering::Relaxed) {
-                                    first_message
-                                        .store(false, std::sync::atomic::Ordering::Relaxed);
-
-                                    // let key: [u8; 32] = pbkdf2_hmac_array::<sha2::Sha256, 32>(
-                                    //     password.read().unwrap().as_ref().unwrap().as_bytes(),
-                                    //     &data,
-                                    //     16000,
-                                    // );
-                                    key.write().unwrap().replace(pbkdf2_hmac_array::<
-                                        sha2::Sha256,
-                                        32,
-                                    >(
-                                        password.read().unwrap().as_ref().unwrap().as_bytes(),
-                                        &data,
-                                        16000,
-                                    ));
-                                    println!("Key loaded");
-
-                                    // cipher = Some(Aes256Gcm::new(&key.into()));
-
-                                    // Deserialize the salt from the message.
-                                    // let salt_message: SaltMessage =
-                                    //     serde_json::from_slice(&data).unwrap();
-                                    // salt = Some(data);
-                                    // salt = Some(Arc::new(data));
-
-                                    // Continue to the next iteration.
-                                    return;
-                                }
 
                                 // decrypt if encryption is enabled
                                 if let Some(cipher) = &cipher {
@@ -441,25 +413,9 @@ async fn main() -> Result<(), ProgramError> {
                     .await?;
                 return Ok(());
             }
-
-            // let mut key: Option<Vec<u8>> = None;
-            // let mut salt: Option<Vec<u8>> = None;
-
-            // let mut salt: Option<SaltString> = None;
-            // if cli.password.is_some() {
-            //     println!("Creating salt for password");
-            // let salt = SaltString::generate(&mut OsRng);
-            //     salt = Some(rand_salt.to_owned());
-            // }
-            // let mut hash: Option<PasswordHash> = None;
-            // if let Some(password) = cli.password.clone() {
-            //     println!("Hashing password");
-            //     hash = Some(Pbkdf2.hash_password(password.as_bytes(), &salt).unwrap());
-            // }
-
             let mut salt = [0u8; 20];
             rand::thread_rng().fill(&mut salt[..]);
-            let mut key: [u8; 20] = [0u8; 20];
+            let mut key = [0u8; 32];
             if let Some(password) = &cli.password {
                 pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut key);
             }
@@ -492,10 +448,6 @@ async fn main() -> Result<(), ProgramError> {
                     }
                 });
             }
-
-            // while let Ok((stream, addr)) = listener.accept().await {
-            //     tokio::spawn(handle_connection(stream, addr, peers.clone(), salt.clone()));
-            // }
         }
     }
 
