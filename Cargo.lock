@@ -270,7 +270,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "local-ip-address",
- "native-tls",
  "pbkdf2",
  "rand",
  "sha2",

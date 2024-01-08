@@ -1,5 +1,5 @@
 use aes_gcm::{
-    aead::{generic_array::GenericArray, Aead, AeadCore, KeyInit, Nonce, OsRng},
+    aead::{generic_array::GenericArray, Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key,
 };
 use arboard::{Clipboard, ImageData};
@@ -7,12 +7,12 @@ use base64::prelude::{Engine as _, BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use errors::ProgramError;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
-use futures_util::{future, pin_mut, stream::TryStreamExt, SinkExt, StreamExt};
+use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 use hyper::{
     body::Incoming,
     header::{
-        HeaderName, HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
-        SEC_WEBSOCKET_VERSION, UPGRADE,
+        HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION,
+        UPGRADE,
     },
     server::conn::http1,
     service::service_fn,
@@ -21,16 +21,16 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use local_ip_address::local_ip;
-use pbkdf2::{pbkdf2_hmac, pbkdf2_hmac_array};
+use pbkdf2::pbkdf2_hmac;
 use rand::Rng;
 use sha2::Sha256;
 use std::{
     collections::HashMap,
     convert::Infallible,
     net::SocketAddr,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_tungstenite::{
     tungstenite::{
         handshake::derive_accept_key,
@@ -70,20 +70,18 @@ enum Commands {
         /// Address to connect to
         #[arg(short, long, env, default_value = "127.0.0.1")]
         address: String,
-        /// Use TLS (NOT IMPLEMENTED YET)
-        #[arg(short, long, env, default_value = "false")]
-        tls: bool,
         // /// Install as a service (probably requires root)
         // #[arg(short, long, env, default_value = "false")]
         // service: bool,
     },
     /// Starts sync server
     Start {
+        // maybe combine port and address into one arg
         /// Port to listen on
-        #[arg(short, long, env, default_value = "4343")]
+        #[arg(env, default_value = "4343")]
         port: u16,
         /// Address to listen on
-        #[arg(short, long, env, default_value = "0.0.0.0")]
+        #[arg(env, default_value = "0.0.0.0")]
         address: String,
         // /// Install as a service (probably requires root)
         // #[arg(short, long, env, default_value = "false")]
@@ -108,21 +106,21 @@ impl Into<Vec<u8>> for Image {
     }
 }
 
-#[derive(PartialEq)]
-enum ClipboardData {
-    Text(String),
-    Image(Image),
-}
+// #[derive(PartialEq)]
+// enum ClipboardData {
+//     Text(String),
+//     Image(Image),
+// }
 
 // client enters password which will be key
 // server generates salt
 // server sends salt to client and client generates key
 
-struct EncryptedClipboardData {
-    data: Vec<u8>,
-    nonce: Vec<u8>,
-    salt: Vec<u8>,
-}
+// struct EncryptedClipboardData {
+//     data: Vec<u8>,
+//     nonce: Vec<u8>,
+//     salt: Vec<u8>,
+// }
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -147,35 +145,17 @@ async fn handle_connection(
     ws_stream: WebSocketStream<TokioIo<Upgraded>>,
     addr: SocketAddr,
 ) {
-    // let mut ws_stream = tokio_tungstenite::accept_async(raw_stream)
-    //     .await
-    //     .expect("Error during the websocket handshake occurred");
     println!("Connected to: {:?}", addr);
-    // send salt to client
-    // if let Some(salt) = salt {
 
-    //     ws_stream
-    //         .send(Message::binary(salt))
-    //         .await
-    //         .expect("Failed to send salt to client");
-    // }
-
-    // Insert the write part of this peer to the peer map.
     let (tx, rx) = unbounded();
     peer_map.lock().unwrap().insert(addr, tx);
 
     let (outgoing, incoming) = ws_stream.split();
 
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        // println!(
-        //     "Received a message from {:?}: {}",
-        //     addr,
-        //     msg.to_text().unwrap()
-        // );
         let peers: std::sync::MutexGuard<'_, HashMap<SocketAddr, UnboundedSender<Message>>> =
             peer_map.lock().unwrap();
 
-        // We want to broadcast the message to everyone except ourselves.
         let broadcast_recipients = peers
             .iter()
             .filter(|(peer_addr, _)| peer_addr != &&addr)
@@ -210,6 +190,8 @@ async fn handle_request<'a>(
     // for (ref header, _value) in req.headers() {
     //     println!("* {}", header);
     // }
+
+    // check if its a valid websocket connection
     let upgrade = HeaderValue::from_static("Upgrade");
     let websocket = HeaderValue::from_static("websocket");
     let headers = req.headers();
@@ -233,9 +215,12 @@ async fn handle_request<'a>(
         || key.is_none()
         || req.uri() != "/sync"
     {
-        return Ok(Response::new(body::bytes("failed")));
+        return Ok(Response::new(body::bytes(
+            "failed to establish websocket connection",
+        )));
     }
 
+    // add headers to response
     let ver = req.version();
     let mut res = Response::new(body::empty());
     *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
@@ -245,18 +230,17 @@ async fn handle_request<'a>(
     res.headers_mut()
         .append(SEC_WEBSOCKET_ACCEPT, derived.unwrap().parse().unwrap());
 
+    // if encryption is enabled, check password and send salt
+    //TODO: send password encrypted to server
     if let Some(hash) = hash {
         let Some(password) = req.headers().get("X-Password") else {
-            return Ok(Response::new(body::bytes("failed")));
+            return Ok(Response::new(body::bytes("no password")));
         };
         let mut new_hash = [0u8; 32];
         pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut new_hash);
         if hash != new_hash {
-            println!("Password is invalid");
-            return Ok(Response::new(body::bytes("failed")));
+            return Ok(Response::new(body::bytes("invalid password")));
         }
-        // let key = Key::<Aes256Gcm>::from_slice(&hash);
-        // let cipher = Aes256Gcm::new(key);
         res.headers_mut()
             .append("X-Salt", BASE64_STANDARD.encode(hash).parse().unwrap());
     }
@@ -284,7 +268,7 @@ async fn main() -> Result<(), ProgramError> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Connect { port, address, tls } => {
+        Commands::Connect { port, address } => {
             if cli.service {
                 let mut env = Vec::new();
                 env.push(("PORT".to_owned(), port.to_string()));
@@ -353,14 +337,11 @@ async fn main() -> Result<(), ProgramError> {
                                 // decrypt if encryption is enabled
                                 if let Some(cipher) = &cipher {
                                     let nonce = GenericArray::from_slice(&data[0..12]);
-                                    println!("nonce: {:?}", nonce);
-
                                     let cipher_text = data[12..].to_vec();
                                     match cipher.decrypt(&nonce, cipher_text.as_ref()) {
                                         Ok(plaintext) => data = plaintext,
                                         Err(e) => {
-                                            dbg!(e);
-
+                                            eprintln!("{:?}", e);
                                             return;
                                         }
                                     };
@@ -492,7 +473,7 @@ async fn read_clipboard(
 
             if let Some(cipher) = &cipher {
                 let nonce: GenericArray<u8, _> = Aes256Gcm::generate_nonce(&mut OsRng);
-                println!("nonce: {:?}, len: {}", nonce, nonce.len());
+                // println!("nonce: {:?}, len: {}", nonce, nonce.len());
                 let ciphertext = cipher.encrypt(&nonce, data.as_ref()).unwrap();
                 // send nonce and ciphertext
                 let mut data_vec = Vec::new();
