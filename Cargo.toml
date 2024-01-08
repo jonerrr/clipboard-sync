@@ -5,12 +5,18 @@ edition = "2021"
 authors = ["Jonah"]
 
 [dependencies]
+pbkdf2 = { version = "0.12.2" }
+aes-gcm = { version = "0.10.3", features = ["aes"] }
 arboard = "3.3.0"
 clap = { version = "4.4.11", features = ["derive", "env"] }
 futures-channel = "0.3.29"
 futures-util = "0.3.29"
+http-body-util = "0.1.0"
+hyper = { version = "1.1.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.2", features = ["tokio"] }
 local-ip-address = "0.5.6"
-native-tls = "0.2.11"
+rand = "0.8.5"
+sha2 = "0.10.8"
 thiserror = "1.0.50"
 tokio = { version = "1.35.0", features = [
     "macros",
@@ -20,3 +26,5 @@ tokio = { version = "1.35.0", features = [
     "process",
 ] }
 tokio-tungstenite = { version = "0.21.0", features = ["native-tls"] }
+# native-tls = "0.2.11"
+base64 = "0.21.6"
