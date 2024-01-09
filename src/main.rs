@@ -50,8 +50,8 @@ struct Cli {
     #[arg(short, long, default_value = "false")]
     service: bool,
 
-    /// Use AES encryption, password is required
-    #[arg(short, long)]
+    /// Encrypt clipboard data with a password (using AES-256-GCM)
+    #[arg(short, long, env)]
     password: Option<String>,
 
     #[command(subcommand)]
@@ -105,22 +105,6 @@ impl Into<Vec<u8>> for Image {
         vec
     }
 }
-
-// #[derive(PartialEq)]
-// enum ClipboardData {
-//     Text(String),
-//     Image(Image),
-// }
-
-// client enters password which will be key
-// server generates salt
-// server sends salt to client and client generates key
-
-// struct EncryptedClipboardData {
-//     data: Vec<u8>,
-//     nonce: Vec<u8>,
-//     salt: Vec<u8>,
-// }
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -184,13 +168,6 @@ async fn handle_request<'a>(
     hash: Option<[u8; 32]>,
     salt: [u8; 20],
 ) -> Result<Response<body::Body>, Infallible> {
-    // println!("Received a new, potentially ws handshake");
-    // println!("The request's path is: {}", req.uri().path());
-    // println!("The request's headers are:");
-    // for (ref header, _value) in req.headers() {
-    //     println!("* {}", header);
-    // }
-
     // check if its a valid websocket connection
     let upgrade = HeaderValue::from_static("Upgrade");
     let websocket = HeaderValue::from_static("websocket");
@@ -384,16 +361,6 @@ async fn main() -> Result<(), ProgramError> {
             future::select(clipboard_to_ws, ws_to_clipboard).await;
         }
         Commands::Start { port, address } => {
-            if cli.service {
-                // maybe use hashmap instead of vec
-                let mut env = Vec::new();
-                env.push(("PORT".to_owned(), port.to_string()));
-                env.push(("ADDRESS".to_owned(), address.to_owned()));
-
-                service::create("clipboard-sync-server".to_owned(), "start".to_owned(), env)
-                    .await?;
-                return Ok(());
-            }
             let mut salt = [0u8; 20];
             rand::thread_rng().fill(&mut salt[..]);
             let mut key = [0u8; 32];
@@ -401,6 +368,20 @@ async fn main() -> Result<(), ProgramError> {
                 pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 60_000, &mut key);
             }
 
+            if cli.service {
+                // maybe use hashmap instead of vec
+                let mut env = Vec::new();
+                env.push(("PORT".to_owned(), port.to_string()));
+                env.push(("ADDRESS".to_owned(), address.to_owned()));
+                env.push((
+                    "PASSWORD".to_owned(),
+                    cli.password.clone().unwrap_or_default(),
+                ));
+
+                service::create("clipboard-sync-server".to_owned(), "start".to_owned(), env)
+                    .await?;
+                return Ok(());
+            }
             let addr = format!("{}:{}", address, port);
             let listener: TcpListener = TcpListener::bind(&addr).await?;
             let local_ip: std::net::IpAddr = local_ip().unwrap();
@@ -473,27 +454,11 @@ async fn read_clipboard(
 
             if let Some(cipher) = &cipher {
                 let nonce: GenericArray<u8, _> = Aes256Gcm::generate_nonce(&mut OsRng);
-                // println!("nonce: {:?}, len: {}", nonce, nonce.len());
                 let ciphertext = cipher.encrypt(&nonce, data.as_ref()).unwrap();
                 // send nonce and ciphertext
                 let mut data_vec = Vec::new();
                 data_vec.extend_from_slice(&nonce);
                 data_vec.extend_from_slice(&ciphertext);
-
-                // let nonce_c = GenericArray::from_slice(&data_vec[0..12]);
-                // println!("nonce_c: {:?}", nonce_c);
-
-                // let cipher_text = data_vec[12..].to_vec();
-
-                // match cipher.decrypt(&nonce_c, cipher_text.as_ref()) {
-                //     Ok(plaintext) => println!("{:?}", plaintext),
-                //     Err(e) => {
-                //         dbg!(e);
-
-                //         return;
-                //     }
-                // };
-
                 tx.unbounded_send(Message::binary(data_vec)).unwrap();
 
                 continue;

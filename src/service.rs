@@ -11,6 +11,23 @@ pub async fn create(
 
     let exe_path = std::env::current_exe()?.display().to_string();
 
+    let config_dir = Command::new("systemd-path")
+        .arg("user-configuration")
+        .output()
+        .await?
+        .stdout;
+    // remove the newline at the end
+    let config_dir = &config_dir[..config_dir.len() - 1];
+
+    let config_dir = format!(
+        "{}/systemd/user",
+        String::from_utf8(config_dir.to_vec()).unwrap()
+    );
+    // check if the directory exists and if not, create it
+    if !std::path::Path::new(&config_dir).exists() {
+        std::fs::create_dir(&config_dir)?;
+    }
+
     let env_formatted = environment
         .iter()
         .map(|(key, value)| format!(r#"Environment="{}={}""#, key, value))
@@ -36,7 +53,8 @@ ExecStart={exe_path} {cmd}
 WantedBy=multi-user.target"#
     );
 
-    let service_path = format!("/etc/systemd/user/{}.service", service_name);
+    // let service_path = format!("/etc/systemd/user/{}.service", service_name);
+    let service_path = format!("{}/{}.service", config_dir, service_name);
     let mut file = std::fs::File::create(&service_path)?;
     file.write_all(service.as_bytes())?;
 
@@ -47,7 +65,7 @@ WantedBy=multi-user.target"#
         .stdout
         .starts_with(b"Enforcing");
     if selinux_enabled {
-        println!("Warning: SELinux is enabled. You may need to change the file's security context so it works with systemd.");
+        println!("WARNING: SELinux is enabled. This may prevent the service from starting.");
     }
 
     Command::new("systemctl")
