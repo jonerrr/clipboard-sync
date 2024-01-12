@@ -47,28 +47,15 @@ struct Cli {
 enum Commands {
     /// Connect client to server
     Connect {
-        /// Port to connect to
-        #[arg(short, long, env, default_value = "4343")]
-        port: u16,
         /// Address to connect to
-        #[arg(short, long, env, default_value = "127.0.0.1")]
+        #[clap(env, default_value = "127.0.0.1:4343")]
         address: String,
-        // /// Install as a service (probably requires root)
-        // #[arg(short, long, env, default_value = "false")]
-        // service: bool,
     },
     /// Starts sync server
     Start {
-        // maybe combine port and address into one arg
-        /// Port to listen on
-        #[arg(env, default_value = "4343")]
-        port: u16,
         /// Address to listen on
-        #[arg(env, default_value = "0.0.0.0")]
+        #[clap(env, default_value = "0.0.0.0:4343")]
         address: String,
-        // /// Install as a service (probably requires root)
-        // #[arg(short, long, env, default_value = "false")]
-        // service: bool,
     },
 }
 
@@ -94,10 +81,9 @@ async fn main() -> Result<(), ProgramError> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Connect { port, address } => {
+        Commands::Connect { address } => {
             if cli.service {
                 let mut env = Vec::new();
-                env.push(("PORT".to_owned(), port.to_string()));
                 env.push(("ADDRESS".to_owned(), address.to_owned()));
                 // added to prevent clipboard errors when running as a service
                 if std::env::consts::OS == "linux" {
@@ -112,7 +98,7 @@ async fn main() -> Result<(), ProgramError> {
                 return Ok(());
             }
 
-            let addr = format!("ws://{}:{}/sync", address, port);
+            let addr = format!("ws://{}/sync", address);
             let mut rng = rand::thread_rng();
             let random_bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
             let sec_websocket_key = BASE64_STANDARD.encode(&random_bytes);
@@ -206,7 +192,7 @@ async fn main() -> Result<(), ProgramError> {
             pin_mut!(clipboard_to_ws, ws_to_clipboard);
             future::select(clipboard_to_ws, ws_to_clipboard).await;
         }
-        Commands::Start { port, address } => {
+        Commands::Start { address } => {
             let mut salt = [0u8; 20];
             rand::thread_rng().fill(&mut salt[..]);
             let mut key = [0u8; 32];
@@ -217,7 +203,6 @@ async fn main() -> Result<(), ProgramError> {
             if cli.service {
                 // maybe use hashmap instead of vec
                 let env = vec![
-                    ("PORT".to_owned(), port.to_string()),
                     ("ADDRESS".to_owned(), address.to_owned()),
                     (
                         "PASSWORD".to_owned(),
@@ -229,7 +214,7 @@ async fn main() -> Result<(), ProgramError> {
                     .await?;
                 return Ok(());
             }
-            let addr = format!("{}:{}", address, port);
+            let addr = format!("{}", address);
             let listener: TcpListener = TcpListener::bind(&addr).await?;
             let local_ip: std::net::IpAddr = local_ip().unwrap();
             println!("Listening on: {}\nLocal IP: {}", addr, local_ip);
