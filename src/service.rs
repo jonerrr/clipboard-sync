@@ -1,7 +1,7 @@
 use std::io::Write;
 use tokio::process::Command;
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub async fn create(
     service_name: String,
     cmd: String,
@@ -100,7 +100,7 @@ WantedBy=multi-user.target"#
 }
 
 // TODO create launchtl plist for macos
-#[cfg(any(target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub async fn create(
     service_name: String,
     cmd: String,
@@ -129,7 +129,7 @@ pub async fn create(
     Ok(())
 }
 
-#[cfg(any(target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub async fn create(
     service_name: String,
     cmd: String,
