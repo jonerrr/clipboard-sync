@@ -117,12 +117,12 @@ pub async fn create(
         .join("");
 
     let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>KeepAlive</key><true/><key>Label</key><string>com.clipboard-sync.{cmd}</string><key>ProgramArguments</key><array><string>{exe_path}</string><string>{cmd}</string></array><key>EnvironmentVariables</key><dict>{env_formatted}</dict><key>RunAtLoad</key><true/></dict></plist>"#
+        r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>KeepAlive</key><true/><key>Label</key><string>com.cync.{cmd}</string><key>ProgramArguments</key><array><string>{exe_path}</string><string>{cmd}</string></array><key>EnvironmentVariables</key><dict>{env_formatted}</dict><key>RunAtLoad</key><true/></dict></plist>"#
     );
 
     println!("{}", plist);
 
-    let service_path = format!("com.clipboard-sync.{}.plist", cmd);
+    let service_path = format!("com.cync.{}.plist", cmd);
     let mut file = std::fs::File::create(&service_path)?;
     file.write_all(plist.as_bytes())?;
 

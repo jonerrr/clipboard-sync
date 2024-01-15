@@ -1,5 +1,6 @@
 [package]
-name = "clipboard-sync"
+name = "cync"
+description = "An easy and secure way to sync your clipboard between devices."
 version = "0.1.0"
 edition = "2021"
 authors = ["Jonah"]

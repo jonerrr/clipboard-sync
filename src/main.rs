@@ -89,12 +89,7 @@ async fn main() -> Result<(), ProgramError> {
                 if std::env::consts::OS == "linux" {
                     env.push(("DISPLAY".to_owned(), std::env::var("DISPLAY").unwrap()));
                 }
-                service::create(
-                    "clipboard-sync-client".to_owned(),
-                    "connect".to_owned(),
-                    env,
-                )
-                .await?;
+                service::create("cync-client".to_owned(), "connect".to_owned(), env).await?;
                 return Ok(());
             }
 
@@ -210,8 +205,7 @@ async fn main() -> Result<(), ProgramError> {
                     ),
                 ];
 
-                service::create("clipboard-sync-server".to_owned(), "start".to_owned(), env)
-                    .await?;
+                service::create("cync-server".to_owned(), "start".to_owned(), env).await?;
                 return Ok(());
             }
             let addr = format!("{}", address);

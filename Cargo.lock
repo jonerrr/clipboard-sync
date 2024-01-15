@@ -257,28 +257,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "702fc72eb24e5a1e48ce58027a675bc24edd52096d5397d4aea7c6dd9eca0bd1"
 
 [[package]]
-name = "clipboard-sync"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "arboard",
- "base64",
- "clap",
- "futures-channel",
- "futures-util",
- "http-body-util",
- "hyper",
- "hyper-util",
- "local-ip-address",
- "pbkdf2",
- "rand",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
-]
-
-[[package]]
 name = "clipboard-win"
 version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -377,6 +355,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
 dependencies = [
  "cipher",
+]
+
+[[package]]
+name = "cync"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "arboard",
+ "base64",
+ "clap",
+ "futures-channel",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "local-ip-address",
+ "pbkdf2",
+ "rand",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
